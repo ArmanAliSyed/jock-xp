@@ -34,7 +34,7 @@ export default function RecentActivity() {
       .from("xp_ledger_view")
       .select("*")
       .order("created_at", { ascending: false })
-      .limit(8);
+      .limit(3); // 👈 only fetch the 3 most recent
 
     if (error) {
       setError(error.message);
