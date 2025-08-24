@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 
 type FeedItem = {
@@ -14,9 +14,6 @@ type FeedItem = {
 // Change if your avatar bucket is named differently
 const AVATAR_BUCKET = "avatars";
 
-// Your admin uid
-const ADMIN_UID = "4361b8ac-0727-4318-a330-40b4347aae05";
-
 /** Convert a profiles.avatar_url that may be a storage path into a public URL */
 function toPublicAvatar(url: string | null) {
   if (!url) return null;
@@ -25,23 +22,11 @@ function toPublicAvatar(url: string | null) {
   return data?.publicUrl ?? null;
 }
 
-/** Parse a Supabase public URL -> { bucket, path } */
-function parseStoragePublicUrl(url?: string | null) {
-  if (!url) return null;
-  // https://<project>.supabase.co/storage/v1/object/public/<bucket>/<path>
-  const m = url.match(/storage\/v1\/object\/public\/([^/]+)\/(.+)$/);
-  if (!m) return null;
-  return { bucket: m[1], path: m[2] };
-}
-
 export default function RecentActivity() {
   const [items, setItems] = useState<FeedItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState<{ src: string; title?: string } | null>(null);
-  const [deleting, setDeleting] = useState<string | null>(null);
-  const [meIsAdmin, setMeIsAdmin] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
 
   const fetchRecent = async () => {
     setError(null);
@@ -49,7 +34,7 @@ export default function RecentActivity() {
       .from("xp_ledger_view")
       .select("*")
       .order("created_at", { ascending: false })
-      .limit(12);
+      .limit(8);
 
     if (error) {
       setError(error.message);
@@ -69,13 +54,6 @@ export default function RecentActivity() {
 
     setItems(mapped);
   };
-
-  // Who am I? (admin check)
-  useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => {
-      setMeIsAdmin(data.user?.id === ADMIN_UID);
-    });
-  }, []);
 
   useEffect(() => {
     fetchRecent().finally(() => setLoading(false));
@@ -102,63 +80,18 @@ export default function RecentActivity() {
     return () => window.removeEventListener("keydown", onEsc);
   }, []);
 
-  // delete row + storage (admin only)
-  const deleteItem = async (it: FeedItem) => {
-    if (!meIsAdmin) return;
-    const ok = window.confirm("Delete this post and its images?");
-    if (!ok) return;
-
-    setDeleting(it.id);
-    setToast(null);
-
-    // Try to remove files first (best-effort)
-    const files = [parseStoragePublicUrl(it.proof_url), parseStoragePublicUrl(it.proof_thumb_url)]
-      .filter(Boolean) as { bucket: string; path: string }[];
-
-    for (const f of files) {
-      // Ignore errors; still try to delete the DB row
-      try {
-        await supabase.storage.from(f.bucket).remove([f.path]);
-      } catch {
-        /* noop */
-      }
-    }
-
-    // Delete the DB row (must delete from the base table, not the view)
-    const { error } = await supabase.from("xp_ledger").delete().eq("id", it.id);
-
-    if (error) {
-      setToast(error.message || "Delete failed. Check RLS/policies.");
-      setDeleting(null);
-      return;
-    }
-
-    // Remove from local list
-    setItems((prev) => prev.filter((x) => x.id !== it.id));
-    setDeleting(null);
-    setToast("Deleted.");
-    setTimeout(() => setToast(null), 1500);
-  };
-
   if (loading) return <p className="text-white/70">Loading…</p>;
   if (error) return <p className="text-rose-400">{error}</p>;
   if (!items.length) return <p className="text-white/60">No recent activity.</p>;
 
   return (
     <>
-      {toast && (
-        <div className="fixed z-[1001] bottom-4 right-4 rounded-lg bg-white/10 border border-white/15 px-3 py-2 text-sm">
-          {toast}
-        </div>
-      )}
-
       <div className="grid gap-3 sm:gap-4">
         {items.map((it) => {
           const thumb = it.proof_thumb_url || it.proof_url || "";
           const avatar = it.user_avatar_url;
           const name = it.user_name || "(unknown)";
           const title = it.task_title || "(untitled)";
-          const isDel = deleting === it.id;
 
           return (
             <article
@@ -212,22 +145,13 @@ export default function RecentActivity() {
                       {new Date(it.created_at).toLocaleString()}
                     </time>
                   </div>
-
-                  {/* Admin delete button */}
-                  {meIsAdmin && (
-                    <button
-                      onClick={() => deleteItem(it)}
-                      disabled={isDel}
-                      className="ml-auto inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.06] px-2.5 py-1.5 text-xs hover:bg-white/[0.1] hover:border-white/20 disabled:opacity-60"
-                      title="Delete post"
-                    >
-                      {isDel ? "Deleting…" : "🗑️ Delete"}
-                    </button>
-                  )}
                 </div>
 
                 {/* Task title */}
-                <div title={title} className="text-white/90 text-sm sm:text-[15px] truncate">
+                <div
+                  title={title}
+                  className="text-white/90 text-sm sm:text-[15px] truncate"
+                >
                   {title}
                 </div>
 
