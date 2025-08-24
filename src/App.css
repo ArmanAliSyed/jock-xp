@@ -1,38 +1,51 @@
-.App {
-  text-align: center;
+/* Base */
+html, body, #root { height: 100%; margin: 0; }
+* { box-sizing: border-box; }
+:root{
+  --bg:#0f1115; --panel:#171a21; --muted:#9aa3b2; --text:#e8ecf1;
+  --accent:#5ac8fa; --border:#262b36; --good:#7ddc7a;
+}
+body { background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+
+/* Layout */
+.app { display: flex; min-height: 100vh; }
+.sidebar {
+  width: 220px; background:#14171d; border-right:1px solid var(--border);
+  display:flex; flex-direction:column; justify-content:space-between; padding:20px;
+}
+.brand { font-weight: 700; font-size: 18px; margin-bottom: 24px; }
+.nav { display: grid; gap: 8px; }
+.navlink {
+  color: var(--text); text-decoration: none; padding: 10px 12px; border-radius: 8px; display: block;
+}
+.navlink.active, .navlink:hover { background: #1d212a; }
+
+.main { flex: 1; display: flex; flex-direction: column; }
+.content { padding: 20px; }
+
+/* Cards + form bits */
+.card {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 12px; padding: 16px;
+}
+.input {
+  width: 100%; padding: 10px; border:1px solid var(--border); border-radius: 10px; background:#0f1115; color:var(--text);
+}
+.btn-primary {
+  padding: 8px 12px; border: none; border-radius: 10px; background: var(--accent); color: #fff; cursor: pointer;
+}
+.list { display: grid; gap: 10px; margin-top: 10px; }
+.list-row {
+  display:flex; align-items:center; justify-content:space-between;
+  border:1px solid var(--border); border-radius:10px; padding:10px; background:#1c2029;
+}
+.btn-ok {
+  background: var(--good); color: #0b0f0c; border: none; padding: 6px 12px; border-radius: 8px; cursor: pointer;
 }
 
-.App-logo {
-  height: 40vmin;
-  pointer-events: none;
+/* Signout */
+.btn-signout {
+  padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border);
+  background: transparent; color: var(--text); cursor: pointer; text-align: left;
 }
-
-@media (prefers-reduced-motion: no-preference) {
-  .App-logo {
-    animation: App-logo-spin infinite 20s linear;
-  }
-}
-
-.App-header {
-  background-color: #282c34;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  font-size: calc(10px + 2vmin);
-  color: white;
-}
-
-.App-link {
-  color: #61dafb;
-}
-
-@keyframes App-logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
+.btn-signout:hover { background: #1d212a; }
