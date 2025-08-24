@@ -103,7 +103,11 @@ export default function Calendar({
     }
   };
 
-  const tasksForSelected = (eventsByDate[selectedKey] ?? []).filter(isIncomplete);
+  // Memoized list for the selected day (prevents ESLint "unused" & re-computes)
+  const tasksForSelected = useMemo(
+    () => (eventsByDate[selectedKey] ?? []).filter(isIncomplete),
+    [eventsByDate, selectedKey]
+  );
 
   return (
     <section className="rounded-3xl border border-white/10 bg-white/[0.04] backdrop-blur p-4 md:p-6 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.6)]">
@@ -218,28 +222,26 @@ export default function Calendar({
         <div className="mb-2 text-sm text-white/70">
           Tasks due on <span className="text-white font-medium">{selectedKey}</span>
         </div>
-        {(eventsByDate[selectedKey]?.filter(isIncomplete).length ?? 0) === 0 ? (
+        {tasksForSelected.length === 0 ? (
           <div className="text-white/60 text-sm">No due tasks.</div>
         ) : (
           <ul className="space-y-2">
-            {eventsByDate[selectedKey]!
-              .filter(isIncomplete)
-              .map((t) => {
-                const d = new Date(t.due_at);
-                const time = d.toLocaleTimeString([], {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                });
-                return (
-                  <li
-                    key={t.id}
-                    className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.05] px-3 py-2"
-                  >
-                    <span className="truncate">{t.title}</span>
-                    <span className="text-white/70 text-sm">{time}</span>
-                  </li>
-                );
-              })}
+            {tasksForSelected.map((t) => {
+              const d = new Date(t.due_at);
+              const time = d.toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+              });
+              return (
+                <li
+                  key={t.id}
+                  className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.05] px-3 py-2"
+                >
+                  <span className="truncate">{t.title}</span>
+                  <span className="text-white/70 text-sm">{time}</span>
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>

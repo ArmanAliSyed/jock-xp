@@ -6,25 +6,26 @@ import { useNavigate } from "react-router-dom";
 
 export default function Landing() {
   const [mode, setMode] = useState<"login" | "signup" | null>(null);
-  const [session, setSession] = useState<Session | null>(null);
   const navigate = useNavigate();
 
+  // Redirect to /dashboard if already logged in
   useEffect(() => {
+    let isMounted = true;
+
     supabase.auth.getSession().then(({ data }) => {
-      if (data.session) {
-        setSession(data.session);
-        navigate("/dashboard");
-      }
+      if (!isMounted) return;
+      if (data.session) navigate("/dashboard");
     });
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, sess) => {
-      if (sess) {
-        setSession(sess);
-        navigate("/dashboard");
-      } else {
-        setSession(null);
-      }
+
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, sess: Session | null) => {
+      if (!isMounted) return;
+      if (sess) navigate("/dashboard");
     });
-    return () => sub.subscription.unsubscribe();
+
+    return () => {
+      isMounted = false;
+      sub.subscription.unsubscribe();
+    };
   }, [navigate]);
 
   return (
