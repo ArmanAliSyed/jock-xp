@@ -1,23 +1,33 @@
 // src/components/AppShell.tsx
 import React, { useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient";
 
 type Item = { to: string; label: string; icon: string };
 
 const items: Item[] = [
   { to: "/dashboard", label: "Dashboard", icon: "🏠" },
-  { to: "/tasks",     label: "Tasks",     icon: "📝" },
-  { to: "/profile",   label: "Profile",   icon: "👤" },
+  { to: "/tasks", label: "Tasks", icon: "📝" },
+  { to: "/profile", label: "Profile", icon: "👤" },
 ];
 
 export default function AppShell() {
-  const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
 
   const handleSignOut = async () => {
-    await supabase.auth.signOut();
-    navigate("/");
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) throw error;
+
+      // Clear any cached auth tokens
+      localStorage.clear();
+      sessionStorage.clear();
+
+      // Hard redirect to landing page
+      window.location.href = "/";
+    } catch (err) {
+      console.error("Error signing out:", err);
+    }
   };
 
   const linkClasses = ({ isActive }: { isActive: boolean }) =>
@@ -89,6 +99,12 @@ export default function AppShell() {
                 <span className="truncate">{it.label}</span>
               </NavLink>
             ))}
+            <button
+              onClick={handleSignOut}
+              className="rounded-xl bg-white/10 hover:bg-white/15 py-2 text-sm mt-2 text-left"
+            >
+              🚪 Sign out
+            </button>
           </nav>
         )}
       </header>
