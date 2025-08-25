@@ -14,6 +14,8 @@ type TaskRow = {
   created_at: string;
 };
 
+type TabKey = "open" | "completed" | "missed";
+
 export default function TaskManager() {
   const [session, setSession] = useState<Session | null>(null);
 
@@ -21,6 +23,7 @@ export default function TaskManager() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [dueAt, setDueAt] = useState<string>(() => defaultDueLocal());
+  const [formOpen, setFormOpen] = useState(true);
 
   // ui
   const [creating, setCreating] = useState(false);
@@ -31,6 +34,9 @@ export default function TaskManager() {
   const [tasks, setTasks] = useState<TaskRow[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // tabs
+  const [tab, setTab] = useState<TabKey>("open");
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session ?? null));
   }, []);
@@ -38,11 +44,13 @@ export default function TaskManager() {
   useEffect(() => {
     if (!session?.user.id) return;
     let alive = true;
+
     (async () => {
       setLoading(true);
       setError(null);
 
       try {
+        // grade overdue (no-op if you don't have this RPC)
         await supabase.rpc("penalize_my_overdue");
       } catch {}
 
@@ -57,12 +65,24 @@ export default function TaskManager() {
       setTasks((data as TaskRow[]) || []);
       setLoading(false);
     })();
-    return () => { alive = false; };
+
+    return () => {
+      alive = false;
+    };
   }, [session?.user.id]);
 
-  const openTasks = useMemo(() => tasks.filter(t => t.status === "open"), [tasks]);
-  const completedTasks = useMemo(() => tasks.filter(t => t.status === "completed"), [tasks]);
-  const missedTasks = useMemo(() => tasks.filter(t => t.status === "missed"), [tasks]);
+  const openTasks = useMemo(
+    () => tasks.filter((t) => t.status === "open"),
+    [tasks]
+  );
+  const completedTasks = useMemo(
+    () => tasks.filter((t) => t.status === "completed"),
+    [tasks]
+  );
+  const missedTasks = useMemo(
+    () => tasks.filter((t) => t.status === "missed"),
+    [tasks]
+  );
 
   /** Create */
   const onCreate = async (e: React.FormEvent) => {
@@ -74,17 +94,15 @@ export default function TaskManager() {
     setLastXP(null);
 
     try {
-      // Ask GPT for XP — now only sending title/description/due_at
-      const { data: xpResp, error: fnErr } = await supabase.functions.invoke("xp-assign", {
-        body: {
-          title,
-          description,
-          due_at: localToISO(dueAt),
-          // minutes/difficulty removed (function should handle defaults)
-        },
-      });
+      // Ask your edge fn for XP
+      const { data: xpResp, error: fnErr } = await supabase.functions.invoke(
+        "xp-assign",
+        {
+          body: { title, description, due_at: localToISO(dueAt) },
+        }
+      );
       if (fnErr) throw fnErr;
-      const xp = xpResp?.xp ?? 10;
+      const xp = (xpResp as any)?.xp ?? 10;
       setLastXP(xp);
 
       const { data, error: insErr } = await supabase
@@ -100,11 +118,12 @@ export default function TaskManager() {
         .single();
 
       if (insErr) throw insErr;
-      setTasks(prev => [data as TaskRow, ...prev]);
+      setTasks((prev) => [data as TaskRow, ...prev]);
 
       setTitle("");
       setDescription("");
       setDueAt(defaultDueLocal());
+      setFormOpen(false);
     } catch (err: any) {
       setError(err.message ?? "Failed to create task");
     } finally {
@@ -118,6 +137,7 @@ export default function TaskManager() {
     try {
       const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
       const path = `${session.user.id}/${task.id}/${Date.now()}.${ext}`;
+
       const { error: upErr } = await supabase.storage
         .from("task-proofs")
         .upload(path, file, { cacheControl: "3600", upsert: false });
@@ -128,9 +148,15 @@ export default function TaskManager() {
       const proof_thumb_url = `${proof_url}?width=512&height=512&resize=cover&quality=70`;
 
       // optimistic
-      setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: "completed", completed_at: new Date().toISOString() } : t));
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === task.id
+            ? { ...t, status: "completed", completed_at: new Date().toISOString() }
+            : t
+        )
+      );
 
-      // RPC (if present) does both updates
+      // try RPC that updates task + ledger
       const tryRpc = await supabase.rpc("complete_task_with_proof", {
         p_task_id: task.id,
         p_proof_url: proof_url,
@@ -138,7 +164,7 @@ export default function TaskManager() {
       });
 
       if (tryRpc.error) {
-        // fallback
+        // fallback path
         const { error: upErr2 } = await supabase
           .from("tasks")
           .update({ status: "completed", completed_at: new Date().toISOString() })
@@ -156,169 +182,234 @@ export default function TaskManager() {
         if (xpErr) throw xpErr;
       }
     } catch (err: any) {
-      setTasks(prev => prev.map(t => (t.id === task.id ? task : t)));
+      // revert
+      setTasks((prev) => prev.map((t) => (t.id === task.id ? task : t)));
       setError(err.message ?? "Failed to complete task with photo");
     }
   };
 
+  const counts = {
+    open: openTasks.length,
+    completed: completedTasks.length,
+    missed: missedTasks.length,
+  };
+
+  const listForTab = tab === "open" ? openTasks : tab === "completed" ? completedTasks : missedTasks;
+
   return (
     <section className="rounded-3xl border border-white/10 bg-white/[0.04] backdrop-blur p-4 md:p-6 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.6)]">
-      <h2 className="text-xl md:text-2xl font-semibold mb-4">Tasks</h2>
-
-      {/* Create form */}
-      <form onSubmit={onCreate} className="grid gap-3 md:gap-4">
-        <input
-          className="rounded-xl bg-white/[0.06] border border-white/10 px-3 py-2 outline-none focus:border-white/20"
-          placeholder="Task title"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          required
-        />
-
-        <textarea
-          className="rounded-xl bg-white/[0.06] border border-white/10 px-3 py-2 outline-none focus:border-white/20 min-h-[100px]"
-          placeholder="Task description"
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-        />
-
-        <div className="grid grid-cols-1 sm:grid-cols-[1fr] gap-3">
-          <label className="grid gap-2">
-            <span className="text-xs text-white/70">Due date & time</span>
-            <input
-              className="rounded-xl bg-white/[0.06] border border-white/10 px-3 py-2 outline-none focus:border-white/20"
-              type="datetime-local"
-              value={dueAt}
-              onChange={(e) => setDueAt(e.target.value)}
-              required
-            />
-          </label>
-        </div>
-
+      {/* Header */}
+      <div className="mb-4 flex items-center justify-between">
+        <h2 className="text-lg sm:text-xl md:text-2xl font-semibold">Tasks</h2>
         <button
-          className="rounded-xl bg-sky-500/90 hover:bg-sky-400 text-slate-950 font-semibold py-2 transition"
-          type="submit"
-          disabled={creating}
+          onClick={() => setFormOpen((v) => !v)}
+          className="rounded-lg border border-white/10 bg-white/[0.06] px-3 py-1.5 text-sm hover:bg-white/[0.1]"
         >
-          {creating ? "Creating…" : "+ Create Card"}
+          {formOpen ? "Hide form" : "Add task"}
         </button>
-
-        {lastXP !== null && (
-          <div className="text-sm text-white/80">
-            Assigned XP: <strong>{lastXP}</strong>
-          </div>
-        )}
-        {error && <div className="text-rose-400">{error}</div>}
-      </form>
-
-      {/* Open */}
-      <div className="mt-6">
-        <h3 className="font-semibold mb-2">Open</h3>
-        {loading ? (
-          <div className="text-white/70">Loading…</div>
-        ) : openTasks.length ? (
-          <div className="grid gap-2">
-            {openTasks.map((t) => (
-              <div
-                key={t.id}
-                className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-3"
-              >
-                <div className="flex-1 min-w-0">
-                  <div className="font-semibold truncate">{t.title}</div>
-                  <div className="text-xs text-white/70 truncate">
-                    Due {formatDate(t.due_at)} · Worth {t.xp_assigned} XP
-                  </div>
-                </div>
-                <CompleteWithPhotoButton onPick={(file) => onCompleteWithPhoto(t, file)} />
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="text-white/60">No open tasks.</div>
-        )}
       </div>
 
-      {/* Completed */}
-      {!!completedTasks.length && (
-        <div className="mt-6">
-          <h3 className="font-semibold mb-2">Completed</h3>
+      {/* Form card */}
+      {formOpen && (
+        <form onSubmit={onCreate} className="mb-5 grid gap-3">
           <div className="grid gap-2">
-            {completedTasks.map((t) => (
-              <div key={t.id} className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-                <div className="flex-1 min-w-0 font-semibold truncate">{t.title}</div>
-                <div className="text-xs text-white/70">
-                  +{t.xp_assigned} XP · {formatDate(t.completed_at || t.due_at)}
-                </div>
-              </div>
-            ))}
+            <input
+              className="rounded-xl bg-white/[0.06] border border-white/10 px-3 py-2 outline-none focus:border-white/20 text-[15px]"
+              placeholder="Task title"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              required
+            />
+            <textarea
+              className="rounded-xl bg-white/[0.06] border border-white/10 px-3 py-2 outline-none focus:border-white/20 min-h-[90px] text-[15px]"
+              placeholder="Task description (optional)"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            />
+            <label className="grid gap-1">
+              <span className="text-xs text-white/60">Due date & time</span>
+              <input
+                className="rounded-xl bg-white/[0.06] border border-white/10 px-3 py-2 outline-none focus:border-white/20"
+                type="datetime-local"
+                value={dueAt}
+                onChange={(e) => setDueAt(e.target.value)}
+                required
+              />
+            </label>
           </div>
-        </div>
+
+          <div className="flex items-center gap-3">
+            <button
+              className="flex-1 rounded-xl bg-sky-500/90 hover:bg-sky-400 text-slate-950 font-semibold py-2.5 transition"
+              type="submit"
+              disabled={creating}
+            >
+              {creating ? "Creating…" : "+ Create Task"}
+            </button>
+          </div>
+
+          {lastXP !== null && (
+            <div className="text-sm text-white/80">Assigned XP: <strong>{lastXP}</strong></div>
+          )}
+          {error && <div className="text-rose-400">{error}</div>}
+        </form>
       )}
 
-      {/* Missed */}
-      {!!missedTasks.length && (
-        <div className="mt-6">
-          <h3 className="font-semibold mb-2">Missed</h3>
-          <div className="grid gap-2">
-            {missedTasks.map((t) => (
-              <div key={t.id} className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-                <div className="flex-1 min-w-0 font-semibold truncate">{t.title}</div>
-                <div className="text-xs text-white/70">
-                  Penalty −{Math.ceil(t.xp_assigned / 2)} XP · Due {formatDate(t.due_at)}
-                </div>
-              </div>
-            ))}
+      {/* Summary chips */}
+      <div className="mb-3 flex items-center gap-2 overflow-x-auto no-scrollbar">
+        <TabChip label={`Open (${counts.open})`} active={tab === "open"} onClick={() => setTab("open")} />
+        <TabChip label={`Completed (${counts.completed})`} active={tab === "completed"} onClick={() => setTab("completed")} />
+        <TabChip label={`Missed (${counts.missed})`} active={tab === "missed"} onClick={() => setTab("missed")} />
+      </div>
+
+      {/* List */}
+      <div className="grid gap-2">
+        {loading ? (
+          <SkeletonList />
+        ) : listForTab.length ? (
+          listForTab.map((t) => (
+            <TaskRowCard
+              key={t.id}
+              t={t}
+              onPickFile={(file) => onCompleteWithPhoto(t, file)}
+              tab={tab}
+            />
+          ))
+        ) : (
+          <div className="text-white/60 text-sm py-3 text-center">
+            {tab === "open" ? "No open tasks." : tab === "completed" ? "Nothing completed yet." : "No missed tasks. Nice!"}
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </section>
   );
 }
 
-/** ---------- Inline pieces ---------- */
-function CompleteWithPhotoButton({ onPick }: { onPick: (file: File) => void }) {
-  const [busy, setBusy] = useState(false);
+/* ------------------- UI bits ------------------- */
+
+function TabChip({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className={[
+        "whitespace-nowrap rounded-full px-3 py-1.5 text-sm border transition",
+        active ? "bg-white text-slate-900 border-white" : "bg-white/[0.06] text-white border-white/10 hover:bg-white/[0.1]",
+      ].join(" ")}
+    >
+      {label}
+    </button>
+  );
+}
+
+function TaskRowCard({
+  t,
+  onPickFile,
+  tab,
+}: {
+  t: TaskRow;
+  onPickFile: (file: File) => void;
+  tab: TabKey;
+}) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
 
   const handleChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    e.target.value = "";
     setBusy(true);
     try {
-      await onPick(file);
+      await onPickFile(file);
     } finally {
       setBusy(false);
-      e.target.value = "";
     }
   };
 
   return (
-    <>
-      <input
-        ref={inputRef}
-        type="file"
-        accept="image/*"
-        capture="environment"
-        className="hidden"
-        onChange={handleChange}
-      />
-      <button
-        onClick={() => inputRef.current?.click()}
-        disabled={busy}
-        className="rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2 text-sm hover:bg-white/[0.1] disabled:opacity-60"
-      >
-        {busy ? "Uploading…" : "Complete w/ Photo"}
-      </button>
-    </>
+    <div
+      className={[
+        "rounded-2xl border p-3 sm:p-4 flex items-start gap-3 sm:gap-4",
+        "bg-white/[0.03] border-white/10"
+      ].join(" ")}
+    >
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center justify-between gap-2">
+          <h4 className="font-semibold truncate">{t.title}</h4>
+          <span
+            className={[
+              "shrink-0 rounded-full px-2 py-0.5 text-xs border",
+              tab === "open"
+                ? "border-amber-300/30 bg-amber-300/10 text-amber-200"
+                : tab === "completed"
+                ? "border-emerald-300/30 bg-emerald-300/10 text-emerald-200"
+                : "border-rose-300/30 bg-rose-300/10 text-rose-200",
+            ].join(" ")}
+          >
+            {t.xp_assigned} XP
+          </span>
+        </div>
+
+        <div className="mt-1 text-xs text-white/70">
+          {tab === "completed"
+            ? `Completed ${formatDate(t.completed_at || t.due_at)}`
+            : tab === "missed"
+            ? `Due ${formatDate(t.due_at)} · Penalty −${Math.ceil(t.xp_assigned / 2)} XP`
+            : `Due ${formatDate(t.due_at)}`}
+        </div>
+
+        {t.description && (
+          <p className="mt-2 text-sm text-white/80 line-clamp-3">{t.description}</p>
+        )}
+      </div>
+
+      {/* Complete with photo (only for open) */}
+      {tab === "open" && (
+        <>
+          <input
+            ref={inputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={handleChange}
+          />
+          <button
+            onClick={() => inputRef.current?.click()}
+            disabled={busy}
+            className="shrink-0 rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2 text-sm hover:bg-white/[0.1] disabled:opacity-60"
+          >
+            {busy ? "Uploading…" : "Proof"}
+          </button>
+        </>
+      )}
+    </div>
   );
 }
 
-/** ---------- Helpers ---------- */
+function SkeletonList() {
+  return (
+    <div className="grid gap-2">
+      {[1, 2, 3].map((i) => (
+        <div
+          key={i}
+          className="rounded-2xl border border-white/10 bg-white/[0.03] p-3 sm:p-4 animate-pulse"
+        >
+          <div className="h-4 w-2/3 bg-white/10 rounded mb-2" />
+          <div className="h-3 w-1/3 bg-white/10 rounded" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ------------------- Helpers ------------------- */
+
 function defaultDueLocal() {
   const d = new Date();
   d.setHours(d.getHours() + 2);
   return toLocalInputValue(d);
 }
+
 function toLocalInputValue(d: Date) {
   const pad = (n: number) => String(n).padStart(2, "0");
   const yyyy = d.getFullYear();
@@ -328,11 +419,17 @@ function toLocalInputValue(d: Date) {
   const mm = pad(d.getMinutes());
   return `${yyyy}-${MM}-${dd}T${hh}:${mm}`;
 }
+
 function localToISO(local: string) {
   const d = new Date(local);
   return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
 }
+
 function formatDate(iso?: string | null) {
   if (!iso) return "—";
-  try { return new Date(iso).toLocaleString(); } catch { return iso; }
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return iso!;
+  }
 }
