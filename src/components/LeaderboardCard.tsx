@@ -1,14 +1,15 @@
+// src/components/LeaderboardCard.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
-import Avatar from "./Avatar"; // keeps your existing avatar uploader/display
+import Avatar from "./Avatar";
 
 type UsersXp = { user_id: string; xp: number };
 type Profile = { id: string; display_name: string | null; avatar_url: string | null };
 
 interface LeaderboardCardProps {
   title?: string;
-  limit?: number;
-  onSeeAll?: () => void;
+  limit?: number;      // page size
+  onSeeAll?: () => void; // still supported, but pager is built in
 }
 
 export default function LeaderboardCard({
@@ -21,6 +22,12 @@ export default function LeaderboardCard({
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
+  // pagination
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const totalPages = Math.max(1, Math.ceil(total / Math.max(1, limit)));
+
+  // fetch a page from Supabase
   useEffect(() => {
     let alive = true;
 
@@ -29,20 +36,25 @@ export default function LeaderboardCard({
         setLoading(true);
         setErr(null);
 
-        // 1) balances high → low
-        const { data: balances, error: e1 } = await supabase
+        const from = (page - 1) * limit;
+        const to = from + limit - 1;
+
+        // 1) users_xp high → low with total count
+        const { data: balances, error: e1, count } = await supabase
           .from("users_xp")
-          .select("user_id,xp")
-          .order("xp", { ascending: false });
+          .select("user_id,xp", { count: "exact" })
+          .order("xp", { ascending: false })
+          .range(from, to);
 
         if (e1) throw e1;
         if (!alive) return;
 
-        const trimmed = (balances ?? []).slice(0, limit);
-        setRows(trimmed);
+        const pageRows = (balances ?? []) as UsersXp[];
+        setRows(pageRows);
+        setTotal(count ?? pageRows.length);
 
-        // 2) profiles for those ids
-        const ids = trimmed.map((b) => b.user_id);
+        // 2) fetch profiles for this page
+        const ids = pageRows.map((b) => b.user_id);
         if (ids.length) {
           const { data: profs, error: e2 } = await supabase
             .from("profiles")
@@ -56,9 +68,13 @@ export default function LeaderboardCard({
             for (const p of profs) map[p.id] = p as Profile;
             setProfiles(map);
           }
+        } else {
+          setProfiles({});
         }
       } catch (e: any) {
         setErr(e.message ?? "Failed to load leaderboard");
+        setRows([]);
+        setProfiles({});
       } finally {
         if (alive) setLoading(false);
       }
@@ -67,14 +83,20 @@ export default function LeaderboardCard({
     return () => {
       alive = false;
     };
-  }, [limit]);
+  }, [page, limit]);
+
+  // if total shrinks, keep page in range
+  useEffect(() => {
+    const tp = Math.max(1, Math.ceil(total / Math.max(1, limit)));
+    if (page > tp) setPage(tp);
+  }, [total, limit, page]);
 
   const ranked = useMemo(
-    () => rows.map((r, i) => ({ rank: i + 1, ...r })),
-    [rows]
+    () => rows.map((r, i) => ({ rank: (page - 1) * limit + i + 1, ...r })),
+    [rows, page, limit]
   );
 
-  const maxXP = useMemo(() => Math.max(1, ...rows.map((r) => r.xp)), [rows]);
+  const maxXPOnPage = useMemo(() => Math.max(1, ...rows.map((r) => r.xp)), [rows]);
 
   const medal = (rank: number) => {
     if (rank === 1) return "🥇";
@@ -85,21 +107,39 @@ export default function LeaderboardCard({
 
   return (
     <section className="rounded-3xl border border-white/10 bg-white/[0.04] backdrop-blur p-4 md:p-6 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.6)]">
-      <div className="mb-4 flex items-center justify-between">
+      {/* Header + pager */}
+      <div className="mb-4 flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <div className="grid place-items-center h-9 w-9 rounded-xl bg-gradient-to-br from-amber-400/70 via-yellow-400/60 to-white/20 ring-1 ring-white/20 shadow-[0_8px_30px_rgba(255,200,0,0.2)]">
             🏆
           </div>
           <h2 className="text-xl md:text-2xl font-semibold">{title}</h2>
         </div>
-        {onSeeAll && (
-          <button
-            onClick={onSeeAll}
-            className="rounded-xl bg-sky-500/90 hover:bg-sky-400 text-slate-950 font-semibold text-sm px-3 py-1.5"
-          >
-            See all
-          </button>
-        )}
+
+        <div className="flex items-center gap-2">
+          {/* optional external "See all" action (e.g., navigate) */}
+
+          {/* pager */}
+          <div className="inline-flex items-center gap-2">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page <= 1 || loading}
+              className="rounded-lg border border-white/10 bg-white/[0.06] px-3 py-1.5 text-sm disabled:opacity-50 hover:bg-white/[0.1]"
+            >
+              Back
+            </button>
+            <span className="text-sm text-white/70">
+              Page {page} / {totalPages}
+            </span>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={page >= totalPages || loading}
+              className="rounded-lg border border-white/10 bg-white/[0.06] px-3 py-1.5 text-sm disabled:opacity-50 hover:bg-white/[0.1]"
+            >
+              Next
+            </button>
+          </div>
+        </div>
       </div>
 
       {loading && <div className="text-white/70">Loading…</div>}
@@ -113,7 +153,7 @@ export default function LeaderboardCard({
               p?.display_name?.trim() ||
               `Player ${user_id.slice(0, 4)}…${user_id.slice(-4)}`;
 
-            const barWidth = Math.max(6, Math.round((xp / maxXP) * 100));
+            const barWidth = Math.max(6, Math.round((xp / maxXPOnPage) * 100));
 
             return (
               <div
@@ -140,7 +180,7 @@ export default function LeaderboardCard({
                     }`}
                     title={`Rank #${rank}`}
                   >
-                    {rank === 1 ? "1" : medal(rank) !== " " ? medal(rank) : rank}
+                    {rank <= 3 ? medal(rank) : rank}
                   </div>
 
                   {/* Avatar + name */}

@@ -1,3 +1,4 @@
+// src/components/RecentActivity.tsx
 import React, { useEffect, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 
@@ -8,17 +9,15 @@ type FeedItem = {
   proof_thumb_url: string | null;
   task_title: string | null;
   user_name: string | null;
-  user_avatar_url: string | null; // may be a storage path OR a full URL
+  user_avatar_url: string | null;
 };
 
-// Change if your avatar bucket is named differently
 const AVATAR_BUCKET = "avatars";
 const PAGE_SIZE = 3;
 
-/** Convert a profiles.avatar_url that may be a storage path into a public URL */
 function toPublicAvatar(url: string | null) {
   if (!url) return null;
-  if (/^https?:\/\//i.test(url)) return url; // already a URL
+  if (/^https?:\/\//i.test(url)) return url;
   const { data } = supabase.storage.from(AVATAR_BUCKET).getPublicUrl(url);
   return data?.publicUrl ?? null;
 }
@@ -29,8 +28,8 @@ export default function RecentActivity() {
   const [error, setError] = useState<string | null>(null);
 
   const [lightbox, setLightbox] = useState<{ src: string; title?: string } | null>(null);
+  const [imgLoaded, setImgLoaded] = useState(false);
 
-  // pagination
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -42,7 +41,6 @@ export default function RecentActivity() {
     const from = (p - 1) * PAGE_SIZE;
     const to = from + PAGE_SIZE - 1;
 
-    // Get exactly PAGE_SIZE rows for page + total count for pager
     const { data, error, count } = await supabase
       .from("xp_ledger_view")
       .select("*", { count: "exact" })
@@ -72,13 +70,10 @@ export default function RecentActivity() {
     setLoading(false);
   };
 
-  // initial + when page changes
   useEffect(() => {
     fetchPage(page);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page]);
 
-  // live updates: when a new completion comes in, jump to page 1 and refresh it
   useEffect(() => {
     const channel = supabase
       .channel("xp_ledger_feed_paginated")
@@ -96,18 +91,28 @@ export default function RecentActivity() {
     };
   }, []);
 
-  // ESC to close lightbox
+  // Esc to close
   useEffect(() => {
     const onEsc = (e: KeyboardEvent) => e.key === "Escape" && setLightbox(null);
     window.addEventListener("keydown", onEsc);
     return () => window.removeEventListener("keydown", onEsc);
   }, []);
 
-  // Keep page in range if total shrinks
+  // Keep page in range
   useEffect(() => {
     const tp = Math.max(1, Math.ceil(total / PAGE_SIZE));
     if (page > tp) setPage(tp);
   }, [total, page]);
+
+  // PRELOAD only — no body scroll lock anymore
+  useEffect(() => {
+    if (lightbox) {
+      setImgLoaded(false);
+      const img = new Image();
+      img.src = lightbox.src;
+      img.onload = () => setImgLoaded(true);
+    }
+  }, [lightbox]);
 
   return (
     <>
@@ -141,7 +146,7 @@ export default function RecentActivity() {
                 key={it.id}
                 className="group grid grid-cols-[110px,1fr] sm:grid-cols-[140px,1fr] items-center gap-4 rounded-2xl border border-white/10 bg-white/[0.04] backdrop-blur-sm p-3 sm:p-4 transition hover:border-white/20 hover:shadow-[0_0_0_1px_rgba(255,255,255,0.06),0_12px_40px_-12px_rgba(0,0,0,0.5)]"
               >
-                {/* Small thumbnail */}
+                {/* Thumbnail */}
                 <button
                   onClick={() => thumb && setLightbox({ src: it.proof_url || thumb, title })}
                   title="View photo"
@@ -163,7 +168,6 @@ export default function RecentActivity() {
                 {/* Text block */}
                 <div className="min-w-0 flex flex-col gap-2">
                   <div className="flex items-center gap-3 min-w-0">
-                    {/* Avatar */}
                     {avatar ? (
                       <img
                         src={avatar}
@@ -175,13 +179,8 @@ export default function RecentActivity() {
                         {name.slice(0, 1).toUpperCase()}
                       </div>
                     )}
-
-                    {/* Name + time */}
                     <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 min-w-0">
-                      <div
-                        title={name}
-                        className="font-semibold truncate max-w-[12rem] sm:max-w-[16rem]"
-                      >
+                      <div title={name} className="font-semibold truncate max-w-[12rem] sm:max-w-[16rem]">
                         {name}
                       </div>
                       <time className="text-xs text-white/60">
@@ -190,12 +189,10 @@ export default function RecentActivity() {
                     </div>
                   </div>
 
-                  {/* Task title */}
                   <div title={title} className="text-white/90 text-sm sm:text-[15px] truncate">
                     {title}
                   </div>
 
-                  {/* Action */}
                   <div>
                     <button
                       onClick={() => thumb && setLightbox({ src: it.proof_url || thumb, title })}
@@ -211,7 +208,6 @@ export default function RecentActivity() {
         </div>
       )}
 
-      {/* Bottom pager (nice on mobile) */}
       {!loading && !error && totalPages > 1 && (
         <div className="mt-3 flex justify-end">
           <Pager
@@ -223,35 +219,47 @@ export default function RecentActivity() {
         </div>
       )}
 
-      {/* Lightbox modal — covers fully, centers image, no weird scrolling */}
+      {/* Non-blocking centered modal: page stays scrollable */}
       {lightbox && (
-        <div
-          onClick={() => setLightbox(null)}
-          className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/80 p-0 sm:p-4"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="relative w-screen h-screen sm:w-[min(95vw,1100px)] sm:h-[90vh] bg-slate-950 rounded-none sm:rounded-2xl overflow-hidden ring-1 ring-white/10 shadow-2xl flex flex-col"
-          >
-            {lightbox.title && (
-              <div className="px-4 py-3 border-b border-white/10 text-white/90 font-semibold">
-                {lightbox.title}
-              </div>
-            )}
-            <div className="flex-1 overflow-auto grid place-items-center bg-black">
-              <img
-                src={lightbox.src}
-                alt={lightbox.title || "Proof"}
-                className="max-w-full max-h-full object-contain"
-              />
-            </div>
-            <div className="px-4 py-3 border-t border-white/10 text-right">
+        <div className="fixed inset-0 z-[1000] pointer-events-none">
+          {/* purely visual backdrop, does NOT intercept scroll/clicks */}
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm pointer-events-none" />
+
+          {/* modal wrapper is clickable; backdrop remains pass-through */}
+          <div className="absolute inset-0 grid place-items-center p-3 sm:p-6">
+            <div
+              role="dialog"
+              aria-modal="true"
+              className="pointer-events-auto relative bg-slate-950 rounded-2xl p-4 shadow-2xl ring-1 ring-white/10 flex flex-col items-center"
+              style={{ maxWidth: "min(92vw, 720px)" }}
+            >
+              {/* Close */}
               <button
+                aria-label="Close"
                 onClick={() => setLightbox(null)}
-                className="rounded-lg bg-white/10 hover:bg-white/15 px-3 py-1.5"
+                className="absolute right-3 top-3 rounded-full border border-white/20 bg-black/60 px-3 py-1 text-sm text-white hover:bg-black/80"
               >
                 Close
               </button>
+
+              {/* Image */}
+              <div className="flex items-center justify-center">
+                {!imgLoaded && <div className="text-white/70 text-sm">Loading photo…</div>}
+                <img
+                  src={lightbox.src}
+                  alt={lightbox.title || "Proof"}
+                  className={`max-w-[90vw] max-h-[80vh] object-contain ${
+                    imgLoaded ? "opacity-100" : "opacity-0"
+                  } transition-opacity`}
+                  onLoad={() => setImgLoaded(true)}
+                />
+              </div>
+
+              {lightbox.title && (
+                <div className="mt-2 text-white/90 text-sm font-medium text-center">
+                  {lightbox.title}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -260,7 +268,7 @@ export default function RecentActivity() {
   );
 }
 
-/* ---------- Small pager component ---------- */
+/* ---------- Small pager ---------- */
 function Pager({
   page,
   totalPages,
