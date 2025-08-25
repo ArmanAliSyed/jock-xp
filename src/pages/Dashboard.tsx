@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import LeaderboardCard from "../components/LeaderboardCard";
 import RecentActivity from "../components/RecentActivity";
 import Calendar from "../components/Calendar";
+import ChatGlobal from "../components/ChatGlobal"; // ⬅️ NEW
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient";
 import type { Session } from "@supabase/supabase-js";
@@ -111,6 +112,9 @@ export default function Dashboard() {
           </div>
           <RecentActivity />
         </section>
+
+        {/* Global Chat — at the very bottom */}
+        <ChatGlobal />
       </div>
     </div>
   );
